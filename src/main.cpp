@@ -1,15 +1,15 @@
 #include <Arduino.h>
 #include "YM2151.h"
-#include "LTC6903.h"
 #include <SPI.h>
-#include <U8g2lib.h>
 #include "SdFat.h"
 #include "TrackStructs.h"
 #include "ringbuffer.h"
 
+HardwareTimer Timer4(TIM4);
+
 //Debug variables
-#define DEBUG false //Set this to true for a detailed printout of the header data & any errored command bytes
-#define DEBUG_LED PA10
+#define DEBUG true //Set this to true for a detailed printout of the header data & any errored command bytes
+#define DEBUG_LED PC13
 bool commandFailed = false;
 uint8_t failedCmd = 0x00;
 
@@ -28,7 +28,6 @@ void clearBuffers();
 void prepareChips();
 void readGD3();
 void setISR();
-void drawOLEDTrackInfo();
 bool startTrack(FileStrategy fileStrategy, String request = "");
 bool vgmVerify();
 uint8_t readBuffer();
@@ -38,22 +37,19 @@ uint32_t readSD32();
 uint16_t parseVGM();
 
 //Sound Chips
-const int prev_btn = PB12;
-const int rand_btn = PB13;
-const int next_btn = PB14;
-const int loop_btn = PB15;
-const int shuf_btn = PA8;
-int YM_Datapins[8] = {PB8, PB9, PC13, PC14, PC15, PA0, PA1, PA2};
-const int YM_CS = PB3;
-const int YM_RD = PA15;
-const int YM_WR = PA12;
-const int YM_A0 = PA11;
-const int YM_IC = PA3; 
+const int prev_btn = PB8;
+const int rand_btn = PB7;
+const int next_btn = PB6;
+const int loop_btn = PB5;
+const int shuf_btn = PB4;
+int YM_Datapins[8] = { PA0, PA1, PA2, PA3, PA4, PA5, PA6, PA7};
+const int YM_CS = PB2;
+const int YM_RD = PB9;
+const int YM_WR = PB1;
+const int YM_A0 = PB0;
+const int YM_IC = PC14; 
 const int YM_IRQ = NULL;
 YM2151 opm(YM_Datapins, YM_CS, YM_RD, YM_WR, YM_A0, YM_IRQ, YM_IC);
-
-//Clock
-LTC6903 ltc(PB0);
 
 //SD & File Streaming
 SdFat SD;
@@ -82,35 +78,93 @@ bool fetching = false;
 volatile bool ready = false;
 PlayMode playMode = SHUFFLE;
 
-//OLED
-U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0);
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+  * @brief  System Clock Configuration
+  *         The system Clock is configured as follow :
+  *            System Clock source            = PLL (HSE)
+  *            SYSCLK(Hz)                     = 72000000
+  *            HCLK(Hz)                       = 72000000
+  *            AHB Prescaler                  = 1
+  *            APB1 Prescaler                 = 2
+  *            APB2 Prescaler                 = 1
+  *            PLL_Source                     = HSE
+  *            PLL_Mul                        = 9
+  *            Flash Latency(WS)              = 2
+  *            ADC Prescaler                  = 6
+  *            USB Prescaler                  = 1.5
+  * @param  None
+  * @retval None
+  */
+WEAK void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {};
+  RCC_PeriphCLKInitTypeDef PeriphClkInit = {};
+
+  /* Initializes the CPU, AHB and APB busses clocks */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
+    Error_Handler();
+  }
+
+  /* Initializes the CPU, AHB and APB busses clocks */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
+                                | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) {
+    Error_Handler();
+  }
+
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_ADC | RCC_PERIPHCLK_USB;
+  PeriphClkInit.AdcClockSelection = RCC_ADCPCLK2_DIV6;
+  PeriphClkInit.UsbClockSelection = RCC_USBCLKSOURCE_PLL_DIV1_5;
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK) {
+    Error_Handler();
+  }
+}
+
+#ifdef __cplusplus
+}
+#endif
+
 
 void setup()
 {
-  ltc.SetFrequency(3579545); 
-  u8g2.begin();
-  u8g2.setFont(u8g2_font_fub11_tf);
-  u8g2.clearBuffer();
-  u8g2.drawStr(0,16,"Aidan Lawrence");
-  u8g2.drawStr(0,32,"YM2151, 2018");
-  u8g2.sendBuffer();
+  SystemClock_Config();
+
   delay(500);
-  pinMode(prev_btn, INPUT_PULLUP);
-  pinMode(rand_btn, INPUT_PULLUP);
-  pinMode(next_btn, INPUT_PULLUP);
-  pinMode(loop_btn, INPUT_PULLUP);
-  pinMode(shuf_btn, INPUT_PULLUP);
+  pinMode(prev_btn, INPUT);
+  pinMode(rand_btn, INPUT);
+  pinMode(next_btn, INPUT);
+  pinMode(loop_btn, INPUT);
+  pinMode(shuf_btn, INPUT);
 
   //COM
-  Serial.begin(9600);
+  Serial.begin(115200);
+
+  Serial.println("Hello! " __DATE__ " " __TIME__);
+  Serial.printf("SystemCoreClock = %ld\r\n", SystemCoreClock);
 
   //SD
-  if(!SD.begin(PA4, SD_SCK_HZ(F_CPU/2)))
+  SPI.setSCLK(PB13);
+  SPI.setMISO(PB14);
+  SPI.setMOSI(PB15);
+  if(!SD.begin(PB12, SD_SCK_HZ(F_CPU/2)))
   {
-    u8g2.clearBuffer();
-    u8g2.drawStr(0,16,"SD Mount");
-    u8g2.drawStr(0,32,"failed!");
-    u8g2.sendBuffer();
     while(true){Serial.println("SD MOUNT FAILED"); delay(1000);}
   }
 
@@ -139,35 +193,16 @@ void setISR()
 {
   Timer4.pause();
   Timer4.setPrescaleFactor(1);
-  Timer4.setOverflow(1633);
-  Timer4.setChannel1Mode(TIMER_OUTPUT_COMPARE);
-  Timer4.attachCompare1Interrupt(tick);
+  Timer4.setOverflow(44100, HERTZ_FORMAT);
+  Timer4.setMode(1, TIMER_DISABLED, 0);
+  Timer4.attachInterrupt(tick);
   Timer4.refresh();
-  Timer4.resume();  
+  Timer4.resume();
 }
 
 void prepareChips()
 {
   opm.Reset();
-}
-
-void drawOLEDTrackInfo()
-{
-  u8g2.setFont(u8g2_font_helvR08_tf);
-  u8g2.clearBuffer();
-  char *cstr = &gd3.enTrackName[0u];
-  u8g2.drawStr(0,9, cstr);
-  cstr = &gd3.enGameName[0u];
-  u8g2.drawStr(0,22, cstr);
-
-  u8g2.setFont(u8g2_font_micro_tr);
-  if(playMode == LOOP)
-    u8g2.drawStr(0,32, "LOOP");
-  else if(playMode == SHUFFLE)
-    u8g2.drawStr(0,32, "SHUFFLE");
-  else
-    u8g2.drawStr(0,32, "IN ORDER");
-  u8g2.sendBuffer();
 }
 
 //Mount file and prepare for playback. Returns true if file is found.
@@ -294,6 +329,7 @@ bool startTrack(FileStrategy fileStrategy, String request)
 
   if(file.isOpen())
     file.close();
+  Serial.printf("Filename: '%s'\r\n", fileName);
   file = SD.open(fileName, FILE_READ);
   if(!file)
     Serial.println("Failed to read file");
@@ -399,7 +435,7 @@ bool startTrack(FileStrategy fileStrategy, String request)
     header.loopOffset += 0x1C;
 
   prebufferLoop();
-  #if DEBUG
+  #if 0// DEBUG
   //Dump the contents of the prebuffer
   for(int i = 0; i<LOOP_PREBUF_SIZE; i++)
   {
@@ -418,7 +454,7 @@ bool vgmVerify()
     startTrack(NEXT);
     return false;
   }
-  ltc.SetFrequency(header.ym2151Clock);
+
   Serial.println("VGM OK!");
   readGD3();
   Serial.println(gd3.enGameName);
@@ -426,7 +462,6 @@ bool vgmVerify()
   Serial.println(gd3.enSystemName);
   Serial.println(gd3.releaseDate);
   Serial.print("Version: "); Serial.println(header.version, HEX);
-  drawOLEDTrackInfo();
   ready = true;
   return true;
 }
@@ -727,11 +762,9 @@ void handleSerialIn()
       break;
       case '/':
         playMode = SHUFFLE;
-        drawOLEDTrackInfo();
       break;
       case '.':
         playMode = LOOP;
-        drawOLEDTrackInfo();
       break;
       case '?':
         Serial.println(gd3.enGameName);
@@ -777,14 +810,12 @@ void handleButtons()
   if(!digitalRead(shuf_btn) && !buttonLock)
   {
     playMode == SHUFFLE ? playMode = IN_ORDER : playMode = SHUFFLE;
-    drawOLEDTrackInfo();
     buttonLock = true;
     delay(50);
   }
   if(!digitalRead(loop_btn) && !buttonLock)
   {
     playMode == LOOP ? playMode = IN_ORDER : playMode = LOOP;
-    drawOLEDTrackInfo();
     buttonLock = true;
     delay(50);
   }

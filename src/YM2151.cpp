@@ -2,7 +2,7 @@
 #include <Arduino.h>
 YM2151::YM2151(int * dataPins, int CS, int RD, int WR, int A0, int IRQ, int IC)
 {
-    disableDebugPorts();
+    //disableDebugPorts();
     _dataPins = dataPins;
     _CS = CS;
     _RD = RD;
@@ -20,8 +20,10 @@ YM2151::YM2151(int * dataPins, int CS, int RD, int WR, int A0, int IRQ, int IC)
     pinMode(_RD, OUTPUT);
     pinMode(_WR, OUTPUT);
     pinMode(_A0, OUTPUT);
-    pinMode(_IRQ, OUTPUT);
-    pinMode(_IC, OUTPUT);
+    if (_IC != NULL)
+        pinMode(_IRQ, OUTPUT);
+    if (_IC != NULL)
+        pinMode(_IC, OUTPUT);
 
     digitalWrite(_CS, HIGH);
     digitalWrite(_RD, HIGH);
@@ -29,14 +31,17 @@ YM2151::YM2151(int * dataPins, int CS, int RD, int WR, int A0, int IRQ, int IC)
     digitalWrite(_A0, HIGH);
     if(_IRQ != NULL)
         digitalWrite(_IRQ, LOW);
-    digitalWrite(_IC, HIGH);
+    if (_IC != NULL)
+        digitalWrite(_IC, HIGH);
 }
 
 void YM2151::Reset()
 {
-    digitalWrite(_IC, LOW);
+    if (_IC != NULL)
+        digitalWrite(_IC, LOW);
     delayMicroseconds(25);
-    digitalWrite(_IC, HIGH);
+    if (_IC != NULL)
+        digitalWrite(_IC, HIGH);
 }
 
 void YM2151::WriteDataPins(unsigned char data) //Digital I/O
